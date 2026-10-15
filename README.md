@@ -2,7 +2,7 @@
 
 > Stop babysitting your AI agents. Let them text you when they need help or finish the job.
 
-A zero-dependency Herdr plugin that sends structured push notifications to your [ntfy](https://ntfy.sh) topic when agents finish or need action, **even while you are viewing their tab**. Requires Herdr 0.9.5+ and Node.js 22+.
+A zero-dependency Herdr plugin that sends structured push notifications to your [ntfy](https://ntfy.sh) topic when agents finish or need action, **even while you are viewing their tab**. Requires Herdr 0.9.3+ and Node.js 22+.
 
 Fork of [zom-2018/herdr-ntfy-notify](https://github.com/zom-2018/herdr-ntfy-notify). The original plugin ID is retained to reuse existing local configuration.
 
