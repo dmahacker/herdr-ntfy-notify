@@ -1,8 +1,8 @@
 id = "zom-2018.herdr-ntfy-notify"
 name = "Herdr ntfy Notification Plugin"
-version = "0.1.0"
-min_herdr_version = "0.7.0"
-description = "Send ntfy pushes when Herdr agents finish or need action."
+version = "0.2.0"
+min_herdr_version = "0.9.5"
+description = "Send ntfy pushes when agents finish or need action, even in the active tab."
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]

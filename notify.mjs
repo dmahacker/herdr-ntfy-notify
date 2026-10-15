@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
+import { createHash } from 'node:crypto';
 
 // Helper to parse .env file
 function loadEnv(filePath) {
@@ -64,7 +65,7 @@ async function resolveNtfyUrl() {
 // Publish using curl command (fast and handles local tailnet SSL gracefully if any)
 function publishWithCurl(url, headers, body) {
   try {
-    const args = ['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '-X', 'POST'];
+    const args = ['curl', '-s', '--max-time', '10', '-o', '/dev/null', '-w', '%{http_code}', '-X', 'POST'];
     for (const [key, value] of Object.entries(headers)) {
       args.push('-H', `${key}: ${value}`);
     }
@@ -73,7 +74,7 @@ function publishWithCurl(url, headers, body) {
 
     // Escape args safely for exec
     const cmd = args.map(arg => `'${arg.replace(/'/g, "'\\''")}'`).join(' ');
-    const stdout = execSync(cmd, { stdio: 'pipe' }).toString().trim();
+    const stdout = execSync(cmd, { stdio: 'pipe', timeout: 12000 }).toString().trim();
     const statusCode = parseInt(stdout, 10);
     return statusCode >= 200 && statusCode < 300;
   } catch (err) {
@@ -172,17 +173,32 @@ async function run() {
     }
   }
 
-  const status = (
-    event?.data?.agent_status || 
-    context?.focused_pane_status || 
-    context?.agent_status || 
-    context?.status || 
-    ''
-  ).toLowerCase();
+  if (!['pane_agent_status_changed', 'pane.agent_status_changed'].includes(event?.event)) return;
+  const eventStatus = event?.data?.agent_status;
+  const target = event?.data?.pane_id;
+  if (!target || !['idle', 'done', 'blocked'].includes(eventStatus)) return;
 
-  if (status !== 'done' && status !== 'blocked') {
+  let live;
+  // shortcut: hooks read current state, use a durable event queue if every transient turn must be delivered.
+  try {
+    const response = JSON.parse(execFileSync(
+      process.env.HERDR_BIN_PATH || 'herdr', ['agent', 'get', target],
+      { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] },
+    ));
+    if (response.error || !response.result?.agent) throw new Error('Agent not found');
+    live = response.result.agent;
+  } catch (err) {
+    console.error('Herdr agent lookup error:', err.message);
     return;
   }
+  const completed = ['idle', 'done'].includes(live.agent_status);
+  const status = completed ? 'done' : live.agent_status;
+  if (status !== 'done' && status !== 'blocked') return;
+  if ((eventStatus === 'blocked') !== (status === 'blocked')) return;
+  const sequence = completed ? live.completion_seq : live.state_change_seq;
+  // completion_seq distinguishes a real foreground completion from an ordinary idle pane.
+  if (!Number.isSafeInteger(sequence) || sequence <= 0 || !live.terminal_id) return;
+  event.data = { ...event.data, ...live };
 
   const agent = event?.data?.display_agent || event?.data?.agent || context?.focused_pane_agent || context?.agent || 'Agent';
   const workspace = event?.data?.workspace || context?.focused_pane_workspace || context?.workspace || '';
@@ -233,7 +249,31 @@ async function run() {
     tags: getTags(status, agent, body),
   };
 
-  await sendNotification(notification);
+  const socket = process.env.HERDR_SOCKET_PATH;
+  const stateDir = process.env.HERDR_PLUGIN_STATE_DIR;
+  if (!socket || !stateDir) throw new Error('Herdr plugin socket/state directory is missing');
+  const socketStat = fs.statSync(socket);
+  const key = createHash('sha256').update(JSON.stringify([
+    socket, socketStat.ino, socketStat.birthtimeMs, socketStat.ctimeMs,
+    live.terminal_id, status, sequence,
+  ])).digest('hex');
+  const receipts = path.join(stateDir, 'notification-receipts');
+  // shortcut: retain small receipts, add safe retention if their count becomes significant.
+  fs.mkdirSync(receipts, { recursive: true });
+  const receipt = path.join(receipts, key);
+  try {
+    // Exclusive creation also deduplicates concurrent event-hook processes.
+    fs.writeFileSync(receipt, '', { flag: 'wx', mode: 0o600 });
+  } catch (err) {
+    if (err.code === 'EEXIST') return;
+    throw err;
+  }
+  try {
+    await sendNotification(notification);
+  } catch (err) {
+    fs.unlinkSync(receipt);
+    throw err;
+  }
 }
 
 async function sendNotification({ title, body, priority, tags }) {
@@ -262,19 +302,10 @@ async function sendNotification({ title, body, priority, tags }) {
   }
 
   // 2. Fallback to native Node fetch
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body,
-    });
-    if (!res.ok) {
-      const responseText = await res.text();
-      console.error(`ntfy publish failed (fetch): ${res.status} ${responseText}`);
-    }
-  } catch (err) {
-    console.error("ntfy publish failed with network error:", err.message);
-  }
+  const res = await fetch(url, {
+    method: 'POST', headers, body, signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`ntfy publish failed: HTTP ${res.status}`);
 }
 
 run().catch(err => {
