@@ -23,14 +23,17 @@ test('completion notifications ignore focus, deduplicate, and keep blocked alert
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}`;
-  const cli = path.join(dir, 'herdr');
-  fs.writeFileSync(cli, `#!${process.execPath}\nif (process.env.FAKE_API_FAIL) process.exit(1);\nconsole.log(JSON.stringify({result:{agent:JSON.parse(process.env.FAKE_AGENT)}}));\n`);
-  fs.chmodSync(cli, 0o700);
+  // Node acts as the fake CLI so the fixture also runs on Windows without a shebang.
+  fs.writeFileSync(path.join(dir, 'agent'), `
+    require('node:assert/strict').deepEqual(process.argv.slice(2), ['get', 'w1:p1']);
+    if (process.env.FAKE_API_FAIL) process.exit(1);
+    console.log(JSON.stringify({result:{agent:JSON.parse(process.env.FAKE_AGENT)}}));
+  `);
   const socket = path.join(dir, 'server.sock');
   fs.writeFileSync(socket, 'test server incarnation');
   const env = {
     ...process.env,
-    HERDR_BIN_PATH: cli,
+    HERDR_BIN_PATH: process.execPath,
     HERDR_SOCKET_PATH: socket,
     HERDR_PLUGIN_STATE_DIR: path.join(dir, 'state'),
     HERDR_PLUGIN_CONFIG_DIR: path.join(dir, 'config'),
@@ -46,8 +49,8 @@ test('completion notifications ignore focus, deduplicate, and keep blocked alert
     state_change_seq: seq, completion_seq: ['idle', 'done'].includes(status) ? seq : null,
   });
   async function run(status, live = agent(status), overrides = {}) {
-    return exec(process.execPath, ['notify.mjs'], {
-      cwd: import.meta.dirname,
+    return exec(process.execPath, [path.join(import.meta.dirname, 'notify.mjs')], {
+      cwd: dir,
       env: {
         ...env,
         HERDR_PLUGIN_EVENT_JSON: JSON.stringify({
@@ -98,6 +101,23 @@ test('completion notifications ignore focus, deduplicate, and keep blocked alert
     assert.equal(messages.length, failures + 2, 'servers are independent');
     await run('idle', agent('idle', 8), { HERDR_PLUGIN_EVENT_JSON: '{' });
     assert.equal(messages.length, failures + 2, 'invalid JSON does not send');
+    const pipe = String.raw`\\.\pipe\herdr-${path.basename(dir)}`;
+    const windows = { HERDR_SOCKET_PATH: pipe };
+    const foreground = await run('idle', agent('idle', 8), windows);
+    assert.equal(foreground.stderr, '', 'named pipe identity does not require a filesystem entry');
+    assert.equal(messages.length, failures + 3, 'named pipe completion must notify');
+    await Promise.all(Array.from({ length: 4 }, () => run('idle', agent('idle', 8), windows)));
+    assert.equal(messages.length, failures + 3, 'named pipe completion is deduplicated');
+    await run('idle', agent('idle', 1, 'new-terminal-after-restart'), windows);
+    assert.equal(messages.length, failures + 4, 'new terminal can restart sequence numbering');
+    const customStatus = `It's "done" & %TEMP% $HOME 中文`;
+    await run('idle', { ...agent('idle', 9), custom_status: customStatus }, windows);
+    assert.equal(messages.length, failures + 5);
+    assert.equal(messages.at(-1).body, `Pi is done: ${customStatus}`, 'shell metacharacters stay literal');
+    // Hide curl without changing the absolute Node path used for the fake Herdr CLI.
+    const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH';
+    await run('idle', agent('idle', 10), { ...windows, [pathKey]: dir });
+    assert.equal(messages.length, failures + 6, 'native fetch works without curl');
   } finally {
     await new Promise(resolve => server.close(resolve));
     fs.rmSync(dir, { recursive: true, force: true });

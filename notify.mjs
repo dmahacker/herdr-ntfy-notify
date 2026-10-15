@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { execSync, execFileSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import { devNull } from 'node:os';
 import { createHash } from 'node:crypto';
 
 // Helper to parse .env file
@@ -56,7 +57,7 @@ async function resolveNtfyUrl() {
     if (res.ok || res.status === 404 || res.status === 405) {
       return config.NTFY_LOCAL_URL;
     }
-  } catch (err) {
+  } catch {
     // Local server unreachable, fallback to default base URL
   }
   return config.NTFY_EXTERNAL_URL;
@@ -65,19 +66,17 @@ async function resolveNtfyUrl() {
 // Publish using curl command (fast and handles local tailnet SSL gracefully if any)
 function publishWithCurl(url, headers, body) {
   try {
-    const args = ['curl', '-s', '--max-time', '10', '-o', '/dev/null', '-w', '%{http_code}', '-X', 'POST'];
+    const args = ['-s', '--max-time', '10', '-o', devNull, '-w', '%{http_code}', '-X', 'POST'];
     for (const [key, value] of Object.entries(headers)) {
       args.push('-H', `${key}: ${value}`);
     }
     args.push('-d', body);
     args.push(url);
 
-    // Escape args safely for exec
-    const cmd = args.map(arg => `'${arg.replace(/'/g, "'\\''")}'`).join(' ');
-    const stdout = execSync(cmd, { stdio: 'pipe', timeout: 12000 }).toString().trim();
+    const stdout = execFileSync('curl', args, { stdio: 'pipe', timeout: 12000 }).toString().trim();
     const statusCode = parseInt(stdout, 10);
     return statusCode >= 200 && statusCode < 300;
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -252,9 +251,9 @@ async function run() {
   const socket = process.env.HERDR_SOCKET_PATH;
   const stateDir = process.env.HERDR_PLUGIN_STATE_DIR;
   if (!socket || !stateDir) throw new Error('Herdr plugin socket/state directory is missing');
-  const socketStat = fs.statSync(socket);
+  // Terminal IDs are unique across restores; Windows endpoints are names, not files to stat.
   const key = createHash('sha256').update(JSON.stringify([
-    socket, socketStat.ino, socketStat.birthtimeMs, socketStat.ctimeMs,
+    socket,
     live.terminal_id, status, sequence,
   ])).digest('hex');
   const receipts = path.join(stateDir, 'notification-receipts');
