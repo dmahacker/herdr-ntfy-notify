@@ -20,12 +20,24 @@ Fork of [zom-2018/herdr-ntfy-notify](https://github.com/zom-2018/herdr-ntfy-noti
 
 ## ⚙️ Quick Start
 
-### 1. Clone over public HTTPS and link
+### 1. Install
 
-Herdr 0.9.5's `plugin install` only accepts GitHub repositories. For this repository, use Git and the local plugin link command:
+#### Direct install from GitHub (recommended)
+
+Herdr supports installing plugins directly from GitHub, as documented in the [official marketplace guide](https://herdr.dev/docs/marketplace/#install-a-plugin):
 
 ```bash
-git clone https://git.qhack.cn/dma/herdr-ntfy-notify.git ~/herdr-ntfy-notify
+herdr plugin install dmahacker/herdr-ntfy-notify
+```
+
+This installs this fork, including its foreground-completion fixes. The plugin ID remains `zom-2018.herdr-ntfy-notify` for configuration and action commands; it is not the installation source.
+
+#### Alternative: clone and link
+
+For local development or a Git-managed installation, clone and link instead. Keep the cloned directory after linking.
+
+```bash
+git clone https://github.com/dmahacker/herdr-ntfy-notify.git ~/herdr-ntfy-notify
 herdr plugin link ~/herdr-ntfy-notify --enabled
 ```
 
@@ -35,7 +47,7 @@ If the upstream plugin is already installed, linking this fork replaces its regi
 
 ```powershell
 $PluginDir = Join-Path $env:LOCALAPPDATA 'herdr-plugins\herdr-ntfy-notify'
-git clone https://git.qhack.cn/dma/herdr-ntfy-notify.git "$PluginDir"
+git clone https://github.com/dmahacker/herdr-ntfy-notify.git "$PluginDir"
 if ($LASTEXITCODE -ne 0) { throw 'Clone failed; do not replace the plugin yet.' }
 herdr plugin link "$PluginDir" --enabled
 herdr plugin action invoke test --plugin zom-2018.herdr-ntfy-notify
@@ -45,7 +57,13 @@ No `.env` copy is needed when replacing the upstream plugin. Future updates use 
 
 ### 2. Configure
 
-Existing installations keep their `.env` in the plugin config directory. For a new installation only:
+Existing installations keep their `.env` in the plugin config directory. For a new installation, locate that directory:
+
+```bash
+herdr plugin config-dir zom-2018.herdr-ntfy-notify
+```
+
+Create a `.env` file there using the variables below. If you cloned this fork, you can instead copy its example:
 
 ```bash
 CONFIG_DIR="$(herdr plugin config-dir zom-2018.herdr-ntfy-notify)"
